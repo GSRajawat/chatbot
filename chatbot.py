@@ -1,6 +1,6 @@
 import torch
 
-with open("C:/Users/GOVT LAW COLLEGE 107/Documents/ai assistant/chat_data.txt", "r", encoding="utf-8") as f:
+with open("chat_data.txt", "r", encoding="utf-8") as f:
     text = f.read()
 
 # Create vocabulary
