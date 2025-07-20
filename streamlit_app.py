@@ -8,8 +8,8 @@ from model import TinyGPT, EMBED_SIZE, BLOCK_SIZE, NUM_HEADS, NUM_LAYERS
 from utils import load_vocabulary
 
 # --- Configuration ---
-CHAT_DATA_PATH = "C:/Users/GOVT LAW COLLEGE 107/Documents/ai assistant/chat_data.txt"
-MODEL_PATH = "C:/Users/GOVT LAW COLLEGE 107/Documents/ai assistant/tiny_gpt_model.pth"
+CHAT_DATA_PATH = "chat_data.txt"
+MODEL_PATH = "tiny_gpt_model.pth"
 MAX_NEW_TOKENS = 100 # How many tokens the bot generates per turn
 DEVICE = 'cpu' # Use 'cuda' if you have a GPU and want to use it
 
