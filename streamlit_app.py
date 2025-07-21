@@ -4,7 +4,7 @@ import os
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # --- Configuration ---
-CHAT_DATA_PATH = "C:/Users/GOVT LAW COLLEGE 107/Documents/ai assistant/chat_data.txt"
+CHAT_DATA_PATH = "chat_data.txt"
 GPT2_MODEL_NAME = "gpt2" # You can try "gpt2-medium" if you have more resources
 MAX_NEW_TOKENS = 100 # How many tokens the bot generates per turn
 DEVICE = 'cpu' # Use 'cuda' if you have a GPU and want to use it
