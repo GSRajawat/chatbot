@@ -1,105 +1,124 @@
-  # streamlit_app.py
 import streamlit as st
 import torch
-import os # To check for file existence
-
-# Import your model and utility functions
-from model import TinyGPT, EMBED_SIZE, BLOCK_SIZE, NUM_HEADS, NUM_LAYERS
-from utils import load_vocabulary
+import os
+from transformers import AutoTokenizer, AutoModelForCausalLM # Import Hugging Face components
 
 # --- Configuration ---
-CHAT_DATA_PATH = "chat_data.txt"
-MODEL_PATH = "tiny_gpt_model.pth"
-MAX_NEW_TOKENS = 100 # How many tokens the bot generates per turn
-DEVICE = 'cpu' # Use 'cuda' if you have a GPU and want to use it
+CHAT_DATA_PATH = "chat_data.txt" # Still useful for fine-tuning
+GPT2_MODEL_NAME = "gpt2"
+MAX_NEW_TOKENS = 100
+DEVICE = 'cpu'
+GEN_TEMPERATURE = 0.7
+GEN_TOP_K = 50
+GEN_TOP_P = 0.95
 
-# --- Load Vocabulary ---
-if not os.path.exists(CHAT_DATA_PATH):
-    st.error(f"Error: chat_data.txt not found at {CHAT_DATA_PATH}. Please ensure it's in the same directory.")
-    st.stop() # Stop the app if data file is missing
+# --- Load GPT-2 Tokenizer and Model (Cached) ---
+@st.cache_resource
+def load_gpt2_model_and_tokenizer():
+    st.info(f"Loading GPT-2 model '{GPT2_MODEL_NAME}' and tokenizer. This may take a moment...")
+    tokenizer = AutoTokenizer.from_pretrained(GPT2_MODEL_NAME)
+    model = AutoModelForCausalLM.from_pretrained(GPT2_MODEL_NAME)
 
-vocab_size, stoi, itos, encode, decode = load_vocabulary(CHAT_DATA_PATH)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token # Essential for generation
 
-# --- Load Model (Cached to prevent reloading on every interaction) ---
-@st.cache_resource # Use st.cache_resource for models/large objects
-def load_tinygpt_model():
-    if not os.path.exists(MODEL_PATH):
-        st.error(f"Error: Model weights '{MODEL_PATH}' not found. Please train the model first and save its weights.")
-        st.stop() # Stop the app if model file is missing
+    model.eval()
+    st.success(f"GPT-2 model '{GPT2_MODEL_NAME}' loaded successfully!")
+    return tokenizer, model
 
-    model = TinyGPT(vocab_size=vocab_size,
-                    embed_size=EMBED_SIZE,
-                    block_size=BLOCK_SIZE,
-                    num_heads=NUM_HEADS,
-                    num_layers=NUM_LAYERS)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device(DEVICE)))
-    model.eval() # Set model to evaluation mode
-    st.success("TinyGPT model loaded successfully!")
-    return model
-
-model = load_tinygpt_model().to(DEVICE)
+tokenizer, model = load_gpt2_model_and_tokenizer()
+model.to(DEVICE)
 
 # --- Streamlit UI ---
-st.set_page_config(page_title="TinyGPT Chatbot", layout="centered")
-st.title("🗣️ TinyGPT Chatbot")
-st.write("A simple character-level language model trained on custom chat data.")
+st.set_page_config(page_title="GPT-2 Chatbot", layout="centered")
+st.title("🗣️ GPT-2 Chatbot")
+st.write(f"A chatbot powered by the pre-trained Hugging Face '{GPT2_MODEL_NAME}' model.")
 
-# Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display chat messages from history on app rerun
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# React to user input
 if prompt := st.chat_input("Say something to the bot..."):
-    # Display user message in chat message container
     st.chat_message("user").markdown(prompt)
-    # Add user message to chat history
     st.session_state.messages.append({"role": "user", "content": prompt})
 
     with st.chat_message("assistant"):
         with st.spinner("Generating response..."):
-            # Ensure the prompt starts with "User: " for consistency
-            full_prompt = "User: " + prompt.strip() + "\nBot:"
+            # Construct the conversation history for the model
+            conversation_history = ""
+            for msg in st.session_state.messages:
+                if msg["role"] == "user":
+                    conversation_history += f"User: {msg['content'].strip()}\n"
+                else: # assistant
+                    conversation_history += f"Bot: {msg['content'].strip()}\n"
+            
+            # Add the current prompt and prime the bot's turn
+            full_prompt_for_generation = conversation_history + f"User: {prompt.strip()}\nBot:"
 
-            # Encode the prompt
-            idx = torch.tensor(encode(full_prompt), dtype=torch.long).unsqueeze(0).to(DEVICE)
+            input_ids = tokenizer.encode(
+                full_prompt_for_generation,
+                return_tensors='pt',
+                truncation=True,
+                max_length=tokenizer.model_max_length # Ensures input doesn't exceed 1024 tokens for GPT-2
+            ).to(DEVICE)
 
-            # Generate response
-            generated_indices = model.generate(idx, max_new_tokens=MAX_NEW_TOKENS)[0].tolist()
-            raw_response = decode(generated_indices)
+            output = model.generate(
+                input_ids,
+                max_new_tokens=MAX_NEW_TOKENS,
+                do_sample=True,
+                temperature=GEN_TEMPERATURE,
+                top_k=GEN_TOP_K,
+                top_p=GEN_TOP_P,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+                # Additional parameter for more controlled generation
+                # This prevents the model from generating more tokens than current input_ids + max_new_tokens
+                # (but max_new_tokens is already doing this)
+                # Setting num_return_sequences=1 ensures we get only one generated sequence
+                num_return_sequences=1
+            )
 
-            # Extract only the bot's response, assuming the model continues the "Bot:" part
-            # This is a heuristic and might need refinement based on your model's actual output
-            try:
-                bot_response_start_idx = raw_response.find("Bot:") + len("Bot:")
-                # Find the next "User:" or end of string to delimit the bot's actual reply
-                next_user_idx = raw_response.find("User:", bot_response_start_idx)
-                if next_user_idx != -1:
-                    bot_text = raw_response[bot_response_start_idx:next_user_idx].strip()
+            raw_generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
+            
+            # --- IMPROVED RESPONSE PARSING ---
+            bot_text = "I'm having trouble understanding or responding to that." # Default fallback
+
+            # The goal is to find the *first* complete "Bot:" turn *after* our input prompt.
+            # We'll look for the last occurrence of "User: [user_prompt]\nBot:" and take everything after it.
+            # Then, we'll try to stop at the next "User:" or the end of the generated text.
+
+            # Find where our prompt ends and bot's response should begin in the *full generated text*
+            expected_start_marker = full_prompt_for_generation
+            
+            # Find the index of the start marker in the raw generated text
+            start_index = raw_generated_text.rfind(expected_start_marker)
+
+            if start_index != -1:
+                # Get the part of the text that comes *after* our exact prompt
+                potential_response = raw_generated_text[start_index + len(expected_start_marker):].strip()
+
+                # Find the next "User:" turn if the model decided to continue the conversation for us
+                next_user_turn_idx = potential_response.find("User:")
+                if next_user_turn_idx != -1:
+                    bot_text = potential_response[:next_user_turn_idx].strip()
                 else:
-                    bot_text = raw_response[bot_response_start_idx:].strip()
-                
-                # Further refine: sometimes it generates the prompt again, remove it
-                if bot_text.startswith(prompt.strip()):
-                    bot_text = bot_text[len(prompt.strip()):].strip()
-                
-                # If the bot_text is empty or just whitespace, provide a fallback
-                if not bot_text:
-                    bot_text = "I'm sorry, I couldn't generate a clear response."
+                    bot_text = potential_response.strip()
+            else:
+                # Fallback if the prompt structure isn't found (e.g., model generated something entirely different)
+                # In this case, we might just show a snippet or the whole raw output.
+                # For now, let's just use the default fallback message.
+                pass # bot_text remains the fallback
 
-            except Exception as e:
-                bot_text = f"Error processing response: {e}. Raw: {raw_response}"
-                
+            # Final check to prevent very short/empty/repetitive responses
+            if not bot_text or bot_text.lower() in [prompt.lower().strip(), "bot:"]:
+                bot_text = "I'm still learning, please try asking something different."
+
             st.markdown(bot_text)
-
-        # Add assistant response to chat history
         st.session_state.messages.append({"role": "assistant", "content": bot_text})
 
-# Optional: Clear chat history button
 if st.sidebar.button("Clear Chat History"):
     st.session_state.messages = []
-    st.rerun() # Rerun the app to clear the display
+    st.rerun()
